@@ -1,499 +1,411 @@
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+# app.py
+# Streamlit – Diabetes Prediction (berbasis notebook Colab)
+
 import streamlit as st
+import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+    roc_auc_score,
+    classification_report,
+)
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    classification_report,
-    confusion_matrix,
-    accuracy_score,
-    roc_auc_score,
-    roc_curve
-)
 
-# Opsional: SMOTE (imbalance handling)
-try:
-    from imblearn.over_sampling import SMOTE
-    HAS_SMOTE = True
-except ImportError:
-    HAS_SMOTE = False
+from imblearn.over_sampling import SMOTE
 
-sns.set(style="whitegrid")
+import plotly.express as px
+import plotly.graph_objects as go
 
-# --------------------------------------------------
+# =========================================================
 # KONFIGURASI HALAMAN
-# --------------------------------------------------
+# =========================================================
 st.set_page_config(
-    page_title="Diabetes Prediction Dashboard",
+    page_title="Diabetes Prediction - Haris",
     page_icon="🩺",
     layout="wide"
 )
 
-st.sidebar.title("🩺 Diabetes ML Dashboard")
-st.sidebar.write("Analisis, visualisasi, dan pemodelan prediksi diabetes.")
-
-# --------------------------------------------------
-# INPUT DATASET
-# --------------------------------------------------
-st.sidebar.subheader("Dataset")
-uploaded = st.sidebar.file_uploader(
-    "Upload dataset CSV (mis. Dataset9_Diabetes_Prediction.csv)",
-    type=["csv"]
+st.markdown(
+    """
+    <style>
+    .main-title {
+        font-size: 32px;
+        font-weight: 700;
+        margin-bottom: 0px;
+    }
+    .sub-title {
+        font-size: 16px;
+        margin-top: 0px;
+        color: #64748b;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
 )
 
-default_path = "Dataset9_Diabetes_Prediction.csv"
-use_default = st.sidebar.checkbox(
-    f"Gunakan file lokal: {default_path}",
-    value=False
-)
+st.markdown('<p class="main-title">🩺 Diabetes Prediction Dashboard</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">Portofolio Final Project – Haris Nur K</p>', unsafe_allow_html=True)
+st.markdown("---")
+
+# =========================================================
+# FUNGSI LOAD DATA (AUTOMATIS)
+# =========================================================
+DATA_PATH = "Dataset9_Diabetes_Prediction.csv"  # Pastikan file ini ada di folder yang sama
 
 @st.cache_data
-def load_data(uploaded_file, use_default_local, default_path):
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-    elif use_default_local:
-        df = pd.read_csv(default_path)
-    else:
-        df = None
+def load_data(path: str):
+    df = pd.read_csv(path)
     return df
 
-df = load_data(uploaded, use_default, default_path)
+# =========================================================
+# FUNGSI PREPROCESSING
+# =========================================================
+def preprocess_data(df: pd.DataFrame):
+    df = df.copy()
 
-# --------------------------------------------------
-# FUNGSI PRA-PROSES (sesuai notebook)
-# --------------------------------------------------
-@st.cache_data
-def preprocess_data(df_raw: pd.DataFrame):
-    df = df_raw.copy()
+    # Kolom yang 0 dianggap missing (sesuai notebook)
+    zero_as_missing = ["Glucose", "BloodPressure", "SkinThickness", "Insulin", "BMI"]
 
-    # Salin seperti di notebook: df_copy
-    df_copy = df.copy(deep=True)
-    cols_zero_to_nan = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
-    df_copy[cols_zero_to_nan] = df_copy[cols_zero_to_nan].replace(0, np.NaN)
+    # Ganti 0 jadi NaN hanya di kolom tertentu
+    df[zero_as_missing] = df[zero_as_missing].replace(0, np.nan)
 
-    # Imputasi median
-    for c in cols_zero_to_nan:
-        df_copy[c].fillna(df_copy[c].median(), inplace=True)
+    # Impute median
+    for col in zero_as_missing:
+        df[col].fillna(df[col].median(), inplace=True)
 
-    # df1 untuk EDA status diabetes dan BMI
-    df1 = df_copy.copy()
+    # Pisahkan fitur dan target
+    X = df.drop("Outcome", axis=1)
+    y = df["Outcome"]
 
-    # Status diabetes
-    df1.loc[df1['Outcome'] == 1, 'Status_Diabetes'] = 'Positif'
-    df1.loc[df1['Outcome'] == 0, 'Status_Diabetes'] = 'Negatif'
+    # Scaling
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    X_scaled = pd.DataFrame(X_scaled, columns=X.columns)
 
-    # Status BMI
-    def get_bmi_status(bmi):
-        if bmi <= 18.4:
-            return "Low"
-        elif bmi <= 25:
-            return "Normal"
-        else:
-            return "High"
-
-    df1["Status_BMI"] = df1["BMI"].apply(get_bmi_status)
-
-    # Status Blood Pressure
-    df1.loc[df1['BloodPressure'] < 59, 'Status_Bloodpressure'] = 'Low'
-    df1.loc[(df1['BloodPressure'] >= 60) & (df1['BloodPressure'] <= 80), 'Status_Bloodpressure'] = 'Normal'
-    df1.loc[df1['BloodPressure'] > 80, 'Status_Bloodpressure'] = 'High'
-
-    return df_copy, df1
-
-# --------------------------------------------------
-# FUNGSI TRAINING MODEL (RF, KNN, LOGREG)
-# --------------------------------------------------
-@st.cache_resource
-def train_models(df_copy: pd.DataFrame):
-    X = df_copy.drop("Outcome", axis=1)
-    y = df_copy["Outcome"]
-
+    # Split data
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.25, random_state=8
+        X_scaled, y, test_size=0.2, random_state=42, stratify=y
     )
 
-    # Random Forest
-    rf = RandomForestClassifier(random_state=8)
-    rf.fit(X_train, y_train)
-    y_pred_rf = rf.predict(X_test)
+    return X_train, X_test, y_train, y_test, scaler, df
 
-    # KNN
-    knn = KNeighborsClassifier()
-    knn.fit(X_train, y_train)
-    y_pred_knn = knn.predict(X_test)
+
+# =========================================================
+# FUNGSI TRAINING MODEL
+# =========================================================
+def train_models(X_train, y_train, use_smote=True):
+    X_tr = X_train
+    y_tr = y_train
+
+    if use_smote:
+        smote = SMOTE(random_state=42)
+        X_tr, y_tr = smote.fit_resample(X_train, y_train)
+
+    models = {}
 
     # Logistic Regression
-    log = LogisticRegression(max_iter=500)
-    log.fit(X_train, y_train)
-    y_pred_log = log.predict(X_test)
+    log_reg = LogisticRegression(max_iter=200, n_jobs=-1)
+    log_reg.fit(X_tr, y_tr)
+    models["Logistic Regression"] = log_reg
 
-    # ROC & AUC (berdasarkan test set)
-    def get_auc_scores(model, X_test, y_test):
-        y_pred = model.predict(X_test)
+    # KNN
+    knn = KNeighborsClassifier(n_neighbors=7)
+    knn.fit(X_tr, y_tr)
+    models["KNN (k=7)"] = knn
+
+    # Random Forest (hyperparameter bisa disesuaikan)
+    rf = RandomForestClassifier(
+        n_estimators=300,
+        max_depth=7,
+        random_state=42,
+        n_jobs=-1
+    )
+    rf.fit(X_tr, y_tr)
+    models["Random Forest"] = rf
+
+    return models
+
+
+# =========================================================
+# FUNGSI EVALUASI MODEL
+# =========================================================
+def evaluate_model(model, X_test, y_test):
+    y_pred = model.predict(X_test)
+    y_proba = None
+    if hasattr(model, "predict_proba"):
         y_proba = model.predict_proba(X_test)[:, 1]
-        auc_score = roc_auc_score(y_test, y_proba)
-        fpr, tpr, _ = roc_curve(y_test, y_proba)
-        return auc_score, fpr, tpr, y_pred
 
-    auc_rf, fpr_rf, tpr_rf, y_pred_rf = get_auc_scores(rf, X_test, y_test)
-    auc_knn, fpr_knn, tpr_knn, y_pred_knn = get_auc_scores(knn, X_test, y_test)
-    auc_log, fpr_log, tpr_log, y_pred_log = get_auc_scores(log, X_test, y_test)
+    acc = accuracy_score(y_test, y_pred)
+    prec = precision_score(y_test, y_pred, zero_division=0)
+    rec = recall_score(y_test, y_pred, zero_division=0)
+    f1 = f1_score(y_test, y_pred, zero_division=0)
+    cm = confusion_matrix(y_test, y_pred)
 
-    results = {
-        "X_train": X_train,
-        "X_test": X_test,
-        "y_train": y_train,
-        "y_test": y_test,
-        "rf": rf,
-        "knn": knn,
-        "log": log,
-        "auc_rf": auc_rf,
-        "auc_knn": auc_knn,
-        "auc_log": auc_log,
-        "fpr_rf": fpr_rf,
-        "tpr_rf": tpr_rf,
-        "fpr_knn": fpr_knn,
-        "tpr_knn": tpr_knn,
-        "fpr_log": fpr_log,
-        "tpr_log": tpr_log,
-        "y_pred_rf": y_pred_rf,
-        "y_pred_knn": y_pred_knn,
-        "y_pred_log": y_pred_log
+    roc = None
+    if y_proba is not None:
+        roc = roc_auc_score(y_test, y_proba)
+
+    return {
+        "accuracy": acc,
+        "precision": prec,
+        "recall": rec,
+        "f1": f1,
+        "roc_auc": roc,
+        "cm": cm,
+        "y_pred": y_pred,
     }
 
-    # SMOTE (opsional, untuk ditampilkan di interface)
-    if HAS_SMOTE:
-        smote = SMOTE(random_state=8)
-        X_smote, y_smote = smote.fit_resample(X_train, y_train)
-        model_tuned = RandomForestClassifier(
-            n_estimators=100,
-            criterion='gini',
-            max_features='sqrt',
-            min_samples_leaf=5,
-            random_state=8
-        ).fit(X_smote, y_smote)
-        tuned_pred = model_tuned.predict(X_smote)
-        tuned_acc = accuracy_score(y_smote, tuned_pred)
-        results["smote_info"] = {
-            "X_smote": X_smote,
-            "y_smote": y_smote,
-            "model_tuned": model_tuned,
-            "tuned_acc": tuned_acc
-        }
 
-    return results
+def plot_confusion_matrix(cm, labels=("Negatif", "Positif")):
+    fig = px.imshow(
+        cm,
+        x=labels,
+        y=labels,
+        text_auto=True,
+        aspect="auto",
+        labels=dict(x="Prediksi", y="Aktual"),
+    )
+    fig.update_layout(title="Confusion Matrix", margin=dict(l=40, r=40, t=40, b=40))
+    return fig
 
-# --------------------------------------------------
-# LAYOUT MENU
-# --------------------------------------------------
-menu = st.sidebar.radio(
-    "Pilih Halaman",
-    [
-        "Beranda",
-        "EDA & Preprocessing",
-        "Visualisasi",
-        "Pemodelan",
-        "Prediksi Individu",
-        "Tentang Data"
-    ]
+
+# =========================================================
+# LOAD & PREPROCESS
+# =========================================================
+try:
+    raw_df = load_data(DATA_PATH)
+except FileNotFoundError:
+    st.error(
+        f"File `{DATA_PATH}` tidak ditemukan. Letakkan file CSV di folder yang sama dengan app.py atau ubah variabel DATA_PATH."
+    )
+    st.stop()
+
+X_train, X_test, y_train, y_test, scaler, df_clean = preprocess_data(raw_df)
+
+# =========================================================
+# SIDEBAR
+# =========================================================
+st.sidebar.header("⚙ Pengaturan")
+page = st.sidebar.radio(
+    "Navigasi",
+    ["Data & EDA", "Training & Evaluasi", "Prediksi Pasien Baru"],
+    index=0,
 )
 
-# --------------------------------------------------
-# KONTEN HALAMAN
-# --------------------------------------------------
-if df is None:
-    st.title("🩺 Diabetes Prediction Dashboard")
-    st.info(
-        "Silakan upload dataset atau aktifkan opsi file lokal di sidebar "
-        "untuk mulai menggunakan dashboard."
+use_smote = st.sidebar.checkbox("Gunakan SMOTE (imbalance handling)", value=True)
+chosen_model_name = st.sidebar.selectbox(
+    "Model utama untuk evaluasi & prediksi",
+    ["Random Forest", "Logistic Regression", "KNN (k=7)"],
+    index=0,
+)
+
+# Latih model sekali, bisa dipakai di semua menu
+models_global = train_models(X_train, y_train, use_smote=use_smote)
+model_global = models_global[chosen_model_name]
+
+# =========================================================
+# 1. DATA & EDA
+# =========================================================
+if page == "Data & EDA":
+    st.subheader("📊 Data & Exploratory Data Analysis (EDA)")
+
+    with st.expander("Lihat contoh data (5 baris pertama)", expanded=True):
+        st.dataframe(raw_df.head())
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Jumlah Baris", len(raw_df))
+    with col2:
+        st.metric("Jumlah Fitur", raw_df.shape[1] - 1)
+    with col3:
+        st.metric("Proporsi Positif Diabetes", f"{raw_df['Outcome'].mean():.2%}")
+
+    st.markdown("### Distribusi Outcome (Positif vs Negatif)")
+    outcome_counts = raw_df["Outcome"].value_counts().rename({0: "Negatif", 1: "Positif"})
+    fig_pie = px.pie(
+        names=outcome_counts.index,
+        values=outcome_counts.values,
+        title="Distribusi Pasien Diabetes",
+        hole=0.3,
     )
+    st.plotly_chart(fig_pie, use_container_width=True)
+
+    st.markdown("### Hubungan Fitur Penting dengan Outcome")
+    features_important = ["Glucose", "BMI", "Age", "Pregnancies"]
+
+    tab1, tab2 = st.tabs(["Distribusi Fitur", "Korelasi"])
+
+    with tab1:
+        feat = st.selectbox("Pilih fitur untuk dilihat distribusinya:", features_important)
+        fig_hist = px.histogram(
+            raw_df,
+            x=feat,
+            color=raw_df["Outcome"].map({0: "Negatif", 1: "Positif"}),
+            barmode="overlay",
+            nbins=30,
+            opacity=0.7,
+            labels={"color": "Outcome"},
+        )
+        fig_hist.update_layout(
+            title=f"Distribusi {feat} berdasarkan Status Diabetes",
+            legend_title_text="Status",
+        )
+        st.plotly_chart(fig_hist, use_container_width=True)
+
+    with tab2:
+        corr = raw_df.corr()
+        fig_corr = px.imshow(
+            corr,
+            text_auto=True,
+            aspect="auto",
+            title="Correlation Matrix",
+        )
+        st.plotly_chart(fig_corr, use_container_width=True)
+
+# =========================================================
+# 2. TRAINING & EVALUASI
+# =========================================================
+elif page == "Training & Evaluasi":
+    st.subheader("🤖 Training & Evaluasi Model")
+
+    model = model_global
+    eval_result = evaluate_model(model, X_test, y_test)
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Accuracy", f"{eval_result['accuracy']:.3f}")
+    col2.metric("Precision", f"{eval_result['precision']:.3f}")
+    col3.metric("Recall", f"{eval_result['recall']:.3f}")
+    col4.metric("F1-Score", f"{eval_result['f1']:.3f}")
+    if eval_result["roc_auc"] is not None:
+        col5.metric("ROC-AUC", f"{eval_result['roc_auc']:.3f}")
+    else:
+        col5.metric("ROC-AUC", "N/A")
+
+    st.markdown("### Confusion Matrix")
+    fig_cm = plot_confusion_matrix(eval_result["cm"])
+    st.plotly_chart(fig_cm, use_container_width=True)
+
+    st.markdown("### Classification Report")
+    report = classification_report(y_test, eval_result["y_pred"], target_names=["Negatif", "Positif"])
+    st.text(report)
+
+    # Feature importance khusus RandomForest
+    if chosen_model_name == "Random Forest":
+        st.markdown("### Feature Importance (Random Forest)")
+        rf_model: RandomForestClassifier = model
+        importances = rf_model.feature_importances_
+        feat_names = X_train.columns
+
+        fi_df = pd.DataFrame(
+            {"Feature": feat_names, "Importance": importances}
+        ).sort_values("Importance", ascending=False)
+
+        fig_fi = px.bar(
+            fi_df,
+            x="Importance",
+            y="Feature",
+            orientation="h",
+            title="Feature Importance",
+        )
+        st.plotly_chart(fig_fi, use_container_width=True)
+
+        st.dataframe(fi_df, use_container_width=True)
+
+# =========================================================
+# 3. PREDIKSI PASIEN BARU
+# =========================================================
 else:
-    # Preprocess
-    df_copy, df1 = preprocess_data(df)
+    st.subheader("🧬 Prediksi Pasien Baru")
 
-    if menu == "Beranda":
-        st.title("🩺 Diabetes Prediction Dashboard")
-        st.markdown("""
-        Dashboard ini menyajikan **analisis data, visualisasi, dan pemodelan machine learning**
-        untuk prediksi diabetes berdasarkan dataset klinis.
-        """)
+    st.markdown(
+        "Isi form di bawah ini dengan data pasien. "
+        "Model akan menampilkan **persentase berpotensi** dan **tidak berpotensi** diabetes."
+    )
 
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Jumlah Observasi", df_copy.shape[0])
-        with col2:
-            st.metric("Jumlah Fitur", df_copy.shape[1] - 1)
-        with col3:
-            st.metric("Fitur Target", "Outcome (Diabetes)")
-
-        st.subheader("Cuplikan Dataset")
-        st.dataframe(df_copy.head())
-
-    elif menu == "EDA & Preprocessing":
-        st.title("🔍 EDA & Preprocessing")
-
-        tab1, tab2, tab3 = st.tabs(
-            ["Informasi Dataset", "Missing Value & Imputasi", "Distribusi Outcome"]
-        )
-
-        with tab1:
-            st.subheader("Informasi Struktur Dataset")
-            st.write("**Tipe data dan jumlah non-null:**")
-            buf = []
-            df_copy.info(buf=buf)
-            info_str = "\n".join(buf)
-            st.text(info_str)
-
-            st.subheader("Statistik Deskriptif")
-            st.write(df_copy.describe())
-
-        with tab2:
-            st.subheader("Missing Value (sebelum imputasi)")
-            cols_zero = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
-            zero_counts = (df[cols_zero] == 0).sum()
-            st.write("Jumlah nilai 0 (dianggap missing) per kolom:")
-            st.write(zero_counts.to_frame("count"))
-
-            st.markdown("""
-            Nilai 0 pada beberapa variabel klinis dianggap sebagai *missing value* dan
-            diganti dengan **median** dari masing-masing kolom (seperti pada notebook).
-            """)
-
-        with tab3:
-            st.subheader("Distribusi Status Diabetes")
-            status_counts = df1["Status_Diabetes"].value_counts()
-
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write("Tabel frekuensi:")
-                st.write(status_counts.to_frame("Jumlah"))
-            with col2:
-                fig, ax = plt.subplots()
-                ax.pie(
-                    status_counts.values,
-                    labels=status_counts.index,
-                    autopct="%1.1f%%",
-                    startangle=90
-                )
-                ax.set_title("Proporsi Positif vs Negatif Diabetes")
-                st.pyplot(fig)
-
-    elif menu == "Visualisasi":
-        st.title("📈 Visualisasi Fitur Klinis")
-
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["BMI & Status Diabetes", "Blood Pressure", "Glucose", "Korelasi"]
-        )
-
-        with tab1:
-            st.subheader("Status BMI & Diabetes")
-            data_bmi = df1["Status_BMI"].value_counts()
-
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write("Distribusi kategori BMI:")
-                st.write(data_bmi.to_frame("Jumlah"))
-            with col2:
-                fig, ax = plt.subplots()
-                ax.pie(
-                    data_bmi.values,
-                    labels=data_bmi.index,
-                    autopct="%1.1f%%",
-                    startangle=90
-                )
-                ax.set_title("Proporsi Status BMI")
-                st.pyplot(fig)
-
-            st.subheader("BMI vs Status Diabetes")
-            data2 = df1.groupby(['Status_BMI', 'Status_Diabetes'])['Outcome'].count().unstack()
-            st.write(data2)
-
-            fig2, ax2 = plt.subplots()
-            data2.plot(kind='bar', ax=ax2)
-            ax2.set_title("Status Diabetes per Kategori BMI")
-            ax2.set_ylabel("Jumlah")
-            st.pyplot(fig2)
-
-        with tab2:
-            st.subheader("Status Blood Pressure")
-            data_bp = df1["Status_Bloodpressure"].value_counts()
-
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(data_bp.to_frame("Jumlah"))
-            with col2:
-                fig3, ax3 = plt.subplots()
-                ax3.bar(data_bp.index, data_bp.values, alpha=0.7)
-                ax3.set_title("Distribusi Status Blood Pressure")
-                st.pyplot(fig3)
-
-            st.subheader("Blood Pressure vs Status Diabetes")
-            data4 = df1.groupby(['Status_Bloodpressure', 'Status_Diabetes'])['Outcome'].count().unstack()
-            st.write(data4)
-
-            fig4, ax4 = plt.subplots()
-            data4.plot(kind='bar', ax=ax4)
-            ax4.set_title("Diabetes dengan Blood Pressure")
-            st.pyplot(fig4)
-
-        with tab3:
-            st.subheader("Distribusi Glucose")
-            fig5, ax5 = plt.subplots()
-            sns.histplot(df1["Glucose"], bins=20, kde=True, ax=ax5)
-            ax5.set_title("Distribusi Glucose")
-            st.pyplot(fig5)
-
-            st.subheader("Glucose: Positif vs Negatif Diabetes")
-            data_pos = df1[df1.Status_Diabetes == "Positif"]["Glucose"]
-            data_neg = df1[df1.Status_Diabetes == "Negatif"]["Glucose"]
-
-            fig6, ax6 = plt.subplots()
-            ax6.hist(data_pos, bins=10, alpha=0.5, label="Positif")
-            ax6.hist(data_neg, bins=10, alpha=0.5, label="Negatif")
-            ax6.set_title("Perbandingan Glucose (Positif vs Negatif)")
-            ax6.legend()
-            st.pyplot(fig6)
-
-        with tab4:
-            st.subheader("Heatmap Korelasi Fitur")
-            fig7, ax7 = plt.subplots(figsize=(10, 8))
-            sns.heatmap(df_copy.corr(), annot=True, cmap="crest", ax=ax7)
-            st.pyplot(fig7)
-
-    elif menu == "Pemodelan":
-        st.title("🤖 Pemodelan Machine Learning")
-
-        results = train_models(df_copy)
-        X_test = results["X_test"]
-        y_test = results["y_test"]
-
-        rf = results["rf"]
-        knn = results["knn"]
-        log = results["log"]
-
-        # Ringkasan akurasi
-        acc_rf = accuracy_score(y_test, results["y_pred_rf"])
-        acc_knn = accuracy_score(y_test, results["y_pred_knn"])
-        acc_log = accuracy_score(y_test, results["y_pred_log"])
-
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Akurasi Random Forest", f"{acc_rf:.3f}")
-        col2.metric("Akurasi KNN", f"{acc_knn:.3f}")
-        col3.metric("Akurasi Logistic Regression", f"{acc_log:.3f}")
-
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["Laporan Klasifikasi", "Confusion Matrix", "ROC Curve", "Feature Importance"]
-        )
-
-        with tab1:
-            st.subheader("Laporan Klasifikasi (Test Set)")
-            st.write("**Random Forest**")
-            st.text(classification_report(y_test, results["y_pred_rf"]))
-            st.write("**KNN**")
-            st.text(classification_report(y_test, results["y_pred_knn"]))
-            st.write("**Logistic Regression**")
-            st.text(classification_report(y_test, results["y_pred_log"]))
-
-        with tab2:
-            st.subheader("Confusion Matrix")
-            models = {
-                "Random Forest": results["y_pred_rf"],
-                "KNN": results["y_pred_knn"],
-                "Logistic Regression": results["y_pred_log"]
-            }
-
-            for name, y_pred in models.items():
-                st.write(f"**{name}**")
-                cm = confusion_matrix(y_test, y_pred)
-                st.write(pd.DataFrame(
-                    cm,
-                    index=["Actual 0 (Non-diabetes)", "Actual 1 (Diabetes)"],
-                    columns=["Pred 0", "Pred 1"]
-                ))
-
-        with tab3:
-            st.subheader("ROC Curve & AUC")
-            fig, ax = plt.subplots(figsize=(8, 6))
-            ax.plot(results["fpr_rf"], results["tpr_rf"], label=f"RF (AUC = {results['auc_rf']:.3f})")
-            ax.plot(results["fpr_knn"], results["tpr_knn"], label=f"KNN (AUC = {results['auc_knn']:.3f})")
-            ax.plot(results["fpr_log"], results["tpr_log"], label=f"LogReg (AUC = {results['auc_log']:.3f})")
-            ax.plot([0, 1], [0, 1], "k--", label="Random (0.5)")
-            ax.set_xlabel("False Positive Rate")
-            ax.set_ylabel("True Positive Rate")
-            ax.set_title("ROC Curve")
-            ax.legend()
-            st.pyplot(fig)
-
-        with tab4:
-            st.subheader("Feature Importance (Random Forest)")
-            importances = pd.Series(rf.feature_importances_, index=df_copy.drop("Outcome", axis=1).columns)
-            importances = importances.sort_values()
-
-            fig_imp, ax_imp = plt.subplots(figsize=(8, 6))
-            importances.plot(kind="barh", ax=ax_imp)
-            ax_imp.set_title("Random Forest Feature Importances")
-            st.pyplot(fig_imp)
-
-            if HAS_SMOTE and "smote_info" in results:
-                st.markdown(f"""
-                **Informasi Tambahan (SMOTE + RF Tuned)**  
-                Akurasi model RF setelah resampling SMOTE dan tuning manual:
-                **{results['smote_info']['tuned_acc']:.3f}**
-                """)
-
-    elif menu == "Prediksi Individu":
-        st.title("🧍 Prediksi Risiko Diabetes (Input Individu)")
-
-        results = train_models(df_copy)
-        rf = results["rf"]  # gunakan RF sebagai model utama
-
-        st.markdown("Masukkan nilai-nilai fitur klinis untuk melakukan prediksi:")
-
+    # Form input
+    with st.form("prediction_form"):
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            pregnancies = st.number_input("Pregnancies", min_value=0, max_value=20, value=1)
+            pregnancies = st.number_input("Pregnancies (Jumlah Kehamilan)", min_value=0, max_value=20, value=1)
             glucose = st.number_input("Glucose", min_value=0.0, max_value=300.0, value=120.0)
             blood_pressure = st.number_input("Blood Pressure", min_value=0.0, max_value=200.0, value=70.0)
 
         with col2:
             skin_thickness = st.number_input("Skin Thickness", min_value=0.0, max_value=100.0, value=20.0)
-            insulin = st.number_input("Insulin", min_value=0.0, max_value=900.0, value=80.0)
-            bmi = st.number_input("BMI", min_value=0.0, max_value=70.0, value=25.0)
+            insulin = st.number_input("Insulin", min_value=0.0, max_value=1000.0, value=80.0)
+            bmi = st.number_input("BMI", min_value=0.0, max_value=70.0, value=28.0)
 
         with col3:
-            dpf = st.number_input("Diabetes Pedigree Function", min_value=0.0, max_value=3.0, value=0.5)
-            age = st.number_input("Age", min_value=1, max_value=120, value=30)
+            dpf = st.number_input("Diabetes Pedigree Function", min_value=0.0, max_value=3.0, value=0.35)
+            age = st.number_input("Age", min_value=10, max_value=120, value=35)
 
-        if st.button("Prediksi"):
-            input_array = np.array([[pregnancies, glucose, blood_pressure,
-                                     skin_thickness, insulin, bmi, dpf, age]])
-            pred = rf.predict(input_array)[0]
-            proba = rf.predict_proba(input_array)[0][1]
+        submitted = st.form_submit_button("Prediksi")
 
-            if pred == 1:
-                st.error(f"Hasil Prediksi: **Diabetes (Positif)** — Probabilitas ≈ {proba:.2f}")
-            else:
-                st.success(f"Hasil Prediksi: **Non-Diabetes (Negatif)** — Probabilitas ≈ {proba:.2f}")
+    if submitted:
+        # Siapkan dataframe 1 baris
+        input_dict = {
+            "Pregnancies": pregnancies,
+            "Glucose": glucose,
+            "BloodPressure": blood_pressure,
+            "SkinThickness": skin_thickness,
+            "Insulin": insulin,
+            "BMI": bmi,
+            "DiabetesPedigreeFunction": dpf,
+            "Age": age,
+        }
+        input_df = pd.DataFrame([input_dict])
 
-    elif menu == "Tentang Data":
-        st.title("ℹ️ Tentang Dataset & Proyek")
+        # Konsisten dengan preprocessing – ganti 0 jadi median untuk kolom tertentu
+        zero_as_missing = ["Glucose", "BloodPressure", "SkinThickness", "Insulin", "BMI"]
+        for col in zero_as_missing:
+            if input_df.loc[0, col] == 0:
+                input_df.loc[0, col] = df_clean[col].median()
 
-        st.markdown("""
-        - Dataset berisi data klinis terkait risiko diabetes (misalnya: **PIMA Indians Diabetes** atau sejenis).
-        - Fitur mencakup: *Pregnancies, Glucose, BloodPressure, SkinThickness, Insulin,
-          BMI, DiabetesPedigreeFunction, Age,* serta **Outcome** sebagai label target.
-        - Analisis pada dashboard ini mencakup:
-          - Exploratory Data Analysis (EDA)
-          - Penanganan missing value dengan imputasi median
-          - Visualisasi distribusi fitur dan hubungan dengan status diabetes
-          - Pemodelan dengan **Random Forest, KNN, dan Logistic Regression**
-          - Evaluasi model menggunakan akurasi, confusion matrix, dan ROC–AUC
-        """)
+        # Scaling
+        input_scaled = scaler.transform(input_df)
 
-        st.caption("Dashboard disusun kembali dari skrip analisis Anda menggunakan Streamlit.")
+        # Pakai model global
+        model_pred = model_global
+
+        # Prediksi probabilitas
+        if hasattr(model_pred, "predict_proba"):
+            probs = model_pred.predict_proba(input_scaled)[0]
+            prob_tidak = probs[0]        # kelas 0
+            prob_berpotensi = probs[1]   # kelas 1
+        else:
+            pred_label_tmp = model_pred.predict(input_scaled)[0]
+            prob_berpotensi = 1.0 if pred_label_tmp == 1 else 0.0
+            prob_tidak = 1.0 - prob_berpotensi
+
+        # Tentukan label utama
+        pred_label = 1 if prob_berpotensi >= 0.5 else 0
+
+        # Menampilkan hasil
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.metric("Berpotensi Diabetes", f"{prob_berpotensi*100:.2f} %")
+        with col_b:
+            st.metric("Tidak Berpotensi Diabetes", f"{prob_tidak*100:.2f} %")
+
+        # Teks interpretasi
+        if pred_label == 1:
+            st.error("📌 Interpretasi: Pasien **BERPOTENSI** mengidap diabetes.")
+        else:
+            st.success("📌 Interpretasi: Pasien **TIDAK BERpotensi** mengidap diabetes.")
+
+        st.markdown("#### Detail Input")
+        st.dataframe(input_df.T, use_container_width=True)
+
+        # 🎈 Tambahan animasi balon saat hasil prediksi muncul
+        st.balloons()
+
